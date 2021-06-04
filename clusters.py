@@ -45,7 +45,7 @@ class GaussianMixture(Cluster):
         while True:
             likelihoods = np.zeros((self.k, len(x)))
             for i, args in enumerate(zip(means, covariances)):
-                likelihoods[i] = multivariate_normal.pdf(x, *args)
+                likelihoods[i] = multivariate_normal.pdf(x, *args, allow_singular = True)
 
             posteriors = likelihoods * priors
             posteriors /= (np.sum(posteriors, axis = 0, keepdims = True))
@@ -61,6 +61,7 @@ class GaussianMixture(Cluster):
                     covariances[i] = np.dot((posteriors[i].reshape(-1, 1) * (x - means[i])).T, (x - means[i]))\
                         / (priors[i] * len(x))
         
+        self.clusters = clusters
         self.means = means
         self.priors = priors
         self.covariances = covariances
@@ -117,7 +118,7 @@ if __name__ == '__main__':
         data.append(np.random.multivariate_normal(parameters[1], parameters[2], 100))
     
     data = np.array(data).reshape(-1, 2)
-    gaussian_mixtures = GaussianMixture(3, 'kmeans++')
+    gaussian_mixtures = GaussianMixture(3)
     gaussian_mixtures.fit(data)
     print(gaussian_mixtures.means)
     print(gaussian_mixtures.priors)
