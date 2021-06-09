@@ -38,7 +38,7 @@ class DecisionTree(Tree):
         self.y = y
         m = x.shape[0]
 
-        entropy =  self._get_entropy(y)
+        entropy =  self._get_entropy(y, m)
         self.root = Node(None, entropy, np.arange(m))
         impure_leaves = [self.root]
         
@@ -54,7 +54,7 @@ class DecisionTree(Tree):
         """
         x = x[node.indices]
         y = y[node.indices]
-        m, n = x.shape
+        n = x.shape[1]
 
         best_gain = 0          # placeholder for best gain across features
         best_feature = None    # placeholder for feature with best gain
@@ -72,14 +72,10 @@ class DecisionTree(Tree):
 
             for value in x_uniques[1:]:     # skip first value since "<" would make an empty left node
                 
-                # calculate entropy for the split less than "value"
-                entropy_left = self._get_entropy(y[feature_x < value])
-                # calculate entropy for the split greater than "value"
-                entropy_right = self._get_entropy(y[feature_x >= value])
-
-                len_left = np.sum(feature_x < value)
-                gain = node.entropy - entropy_left * len_left / m - entropy_right * (m - len_left) / m
-                if gain > best_gain:
+                entropy_left, entropy_right, gain = \
+                    self._get_gain(feature_x, y, value, node.entropy)
+                
+                if self.criterion == 'entropy' and gain > best_gain:
                     best_gain = gain
                     best_feature = i
                     splitter = value
@@ -89,20 +85,45 @@ class DecisionTree(Tree):
                     right_node['indices'] = node.indices[feature_x >= value]
 
         node.feature = best_feature
-        node.gain = gain
+        node.gain = best_gain
         node.splitter = splitter
         node.children = [Node(**left_node), Node(**right_node)]
 
-    def _get_entropy(self, y):
+    def _get_gain(self, feature_x, y, split_value, parent_entropy):
+        """calculates gain of given split
+        
+        Arguments:
+        feature_x -- the feature to be split
+        y -- vector of labels for samples
+        split_value -- value of feature that would be the split point
+        parent_entropy -- entropy of the node before split
+
+        Returns:
+        left_entropy -- entropy of the samples to the left of split point
+        right_entropy -- entropy of the samples to the right of split point
+        gain -- information gain from the split
+        """
+        m = len(feature_x)
+        # calculate entropy for the split less than "value"
+        entropy_left = self._get_entropy(y[feature_x < split_value], m)
+        # calculate entropy for the split greater or equal to "value"
+        entropy_right = self._get_entropy(y[feature_x >= split_value], m)
+
+        len_left = np.sum(feature_x < split_value)
+        gain = parent_entropy - entropy_left * len_left / m - entropy_right * (m - len_left) / m
+        
+        return entropy_left, entropy_right, gain
+
+    def _get_entropy(self, y, m):
         """calculates entropy of given samples
         
         Arguments:
         y -- vector of labels for samples
+        m -- length of samples
 
         Returns:
         entropy -- entropy of the samples
         """
-        m = len(y)
         classes = np.unique(y)
         probabilities = [np.sum(y == label) / m for label in classes]
         entropy = -1 * np.sum([p * np.log2(p) for p in probabilities])
