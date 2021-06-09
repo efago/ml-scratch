@@ -131,7 +131,6 @@ class DecisionTree(Tree):
         return prediction
 
 
-
 if __name__ == '__main__':
     x = np.array([[31, 29, 27, 35, 28, 40, 39], [45, 47, 55, 53, 51, 50, 41]]).T
     y = np.array([1, 0, 0, 1, 0, 1, 0])
