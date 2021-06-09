@@ -1,16 +1,18 @@
 import numpy as np
 from collections import Counter
+from multiprocessing import Pool
 from sklearn.datasets import load_iris
 
 
 class Node:
-    def __init__(self, parent, impurity, indices, children=None, \
+    def __init__(self, parent, impurity, indices, depth, children=None, \
         feature=None, splitter=None, gain=None):
         """a class node that represents a node in the tree
         """
         self.parent = parent        # parent of node
         self.impurity = impurity    # entropy or gini of node
         self.indices = indices      # indices of samples in the node
+        self.depth = depth          # depth of node
         self.children = children    # children of node after split
         self.feature = feature      # feature used for split
         self.splitter = splitter    # value of the feature used for split
@@ -39,14 +41,20 @@ class DecisionTree(Tree):
         m = x.shape[0]
 
         impurity = self._get_impurity(y, m)         # get gini or entorpy of root node
-        self.root = Node(None, impurity, np.arange(m))      # root node
+        self.root = Node(None, impurity, np.arange(m), 0)      # root node
         impure_leaves = [self.root]     # nodes with gini or entorpy greater than zero
         
         while impure_leaves:
             node = impure_leaves.pop()
             if not node.children and node.impurity:      # if not split & entropy > 0
-                self._split(x, y, node)
-                impure_leaves.extend(node.children)
+                if self.max_depth and node.depth == self.max_depth:
+                    continue    # pass if max_depth is reached
+                elif self.min_sample_split and len(node.indices) < self.min_sample_split:
+                    continue    # pass if samples in node is less than min_sample_split
+                else:
+                    self._split(x, y, node)
+                    if node.children:       # else node wasn't split and no gain found
+                        impure_leaves.extend(node.children)
 
 
     def _split(self, x, y, node):
@@ -54,7 +62,11 @@ class DecisionTree(Tree):
         """
         x = x[node.indices]
         y = y[node.indices]
-        n = x.shape[1]
+        # prepare the features to be considered during split
+        if self.max_features:
+            feature_indices = np.random.choice(x.shape[1], self.max_features)
+        else:
+            feature_indices = range(x.shape[1])
 
         best_gain = 0          # placeholder for best gain across features
         best_feature = None    # placeholder for feature with best gain
@@ -63,36 +75,60 @@ class DecisionTree(Tree):
             'parent' : node,
             'impurity' : None,
             'indices' : None,
+            'depth' : node.depth + 1
         }
         right_node = left_node.copy()
         
-        for i in range(n):      # iterate across the features
+        for i in feature_indices:      # iterate across the feature indices
             feature_x = x[:, i]
             x_uniques = np.sort(np.unique(feature_x))   # sorted unique values for splitting
+            m = len(feature_x)
 
-            for value in x_uniques[1:]:     # skip first value since "<" would make an empty left node
-                m = len(feature_x)
-                len_left = np.sum(feature_x < value)        # length of samples of left node
-                
-                # calculate gini or entropy of splitted nodes
-                impurity_left = self._get_impurity(y[feature_x < value], len_left)
-                impurity_right = self._get_impurity(y[feature_x >= value], m - len_left)              
+            values = x_uniques[1:]      # skip first value since "<" would make an empty left node
+            len_lefts = np.sum(feature_x.reshape(-1, 1) < values, axis=0)   # length of samples of left node
 
-                gain = node.impurity - impurity_left * len_left / m - impurity_right * (m - len_left) / m
-    
-                if gain > best_gain:
-                    best_gain = gain
+            if self.n_jobs > 1:
+                with Pool(processes=self.n_jobs) as pool:
+                    gains = pool.starmap(self._get_gain, zip(values, len_lefts))
+            else:
+                gains = []  # placeholder for dicts of (left_impurity, right_impurity, gain) of all splits
+                for j in range(len(values)):
+                    gains.append(self._get_gain(values[j], len_lefts[j]))
+
+            for k, gain in enumerate(gains):
+                if gain['gain'] > best_gain:
+                    best_gain = gain['gain']
                     best_feature = i
-                    splitter = value
-                    left_node['impurity'] = impurity_left
-                    left_node['indices'] = node.indices[feature_x < value]
-                    right_node['impurity'] = impurity_right
-                    right_node['indices'] = node.indices[feature_x >= value]
+                    splitter = values[k]
+                    left_node['impurity'] = gain['left_impurity']
+                    left_node['indices'] = node.indices[feature_x < splitter]
+                    right_node['impurity'] = gain['right_impurity']
+                    right_node['indices'] = node.indices[feature_x >= splitter]
 
-        node.feature = best_feature
-        node.gain = best_gain
-        node.splitter = splitter
-        node.children = [Node(**left_node), Node(**right_node)]
+        if best_gain > 0:       # else the node will be a leaf node
+            node.feature = best_feature
+            node.gain = best_gain
+            node.splitter = splitter
+            node.children = [Node(**left_node), Node(**right_node)]
+
+    def _get_gain(self, feature_x, y, m):
+        """calculates entropy or gini of given samples
+        
+        Arguments:
+        y -- vector of labels for samples
+        m -- length of samples
+
+        Returns:
+        impurity -- impurity of the samples in terms of gini or entropy
+        """
+        classes = np.unique(y)
+        probabilities = np.array([np.sum(y == label) / m for label in classes])
+        if self.criterion == 'entropy':
+            impurity =  -1 * np.sum(probabilities * np.log2(probabilities))
+        else:
+            impurity = 1 - np.sum(probabilities**2)
+
+        return impurity
 
     def _get_impurity(self, y, m):
         """calculates entropy or gini of given samples
@@ -139,6 +175,6 @@ if __name__ == '__main__':
     x = np.array([[31, 29, 27, 35, 28, 40, 39], [45, 47, 55, 53, 51, 50, 41]]).T
     y = np.array([1, 0, 0, 1, 0, 1, 0])
     x_iris, y_iris = load_iris(True)
-    tree = DecisionTree('gini')
+    tree = DecisionTree('entropy', max_features=1)
     tree.fit(x_iris, y_iris)
     print(tree.predict(x_iris) - y_iris)
