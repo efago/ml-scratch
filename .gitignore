@@ -1,4 +1,5 @@
 kernel
+kernel/*
 .ipynb_checkpoints
 .DS_Store
 7			
