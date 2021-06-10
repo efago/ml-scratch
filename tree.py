@@ -9,13 +9,13 @@ class Node:
         feature=None, splitter=None, gain=None):
         """a class node that represents a node in the tree"""
         self.parent = parent        # parent of node
-        self.impurity = impurity    # entropy or gini of node
+        self.impurity = impurity    # entropy, gini, mse, or mae of node
         self.indices = indices      # indices of samples in the node
         self.depth = depth          # depth of node
         self.children = children    # children of node after split
         self.feature = feature      # feature used for split
         self.splitter = splitter    # value of the feature used for split
-        self.gain = gain            # information gain after split
+        self.gain = gain            # information gain or variance reduction gain after split
         
 
 class Tree:
@@ -29,19 +29,11 @@ class Tree:
         self.min_sample_split = min_sample_split
         self.n_jobs = n_jobs
 
-
-class DecisionTree(Tree):
-    """Decision Tree classifier class"""
-    def __init__(self, criterion='entropy', max_depth=None,\
-        max_leaves=2, max_features=None, min_sample_split=None, n_jobs=1):
-        super().__init__(criterion, max_depth, max_leaves, \
-            max_features, min_sample_split, n_jobs)
-
     def fit(self, x, y):
         self.y = y
         m = x.shape[0]
 
-        impurity = self._get_impurity(y, m)         # get gini or entorpy of root node
+        impurity = self._get_impurity(y, m)     # get gini or entorpy or mse or l1 of root node
         self.root = Node(None, impurity, np.arange(m), 0)      # root node
         impure_leaves = [self.root]     # nodes with gini or entorpy greater than zero
         
@@ -57,7 +49,7 @@ class DecisionTree(Tree):
                     if node.children:       # else node wasn't split because no gain found
                         impure_leaves.extend(node.children)
 
-        if self.max_leaves > 2:     # if True prune the tree
+        if self.max_leaves and self.max_leaves > 2: # if True prune the tree
             leaves = self._get_leaves(self.root)
             while len(leaves) > self.max_leaves:
                 least_gain = np.inf
@@ -76,17 +68,6 @@ class DecisionTree(Tree):
                 leaves.remove(least_gain_leaves[0])
                 leaves.remove(least_gain_leaves[1])
                 leaves.append(least_gain_leaves[0].parent)
-
-    def _get_leaves(self, node):
-        """returns all terminal leaves of tree"""
-        leaves = []
-        if node.children:
-            for child in node.children:
-                leaves.extend(self._get_leaves(child))
-        else:
-            leaves.append(node)
-
-        return leaves
 
     def _split(self, x, y, node):
         """finds the best split for a node
@@ -172,6 +153,86 @@ class DecisionTree(Tree):
             'impurity_right': impurity_right, 
             'gain': gain
             }
+             
+    def _get_leaves(self, node):
+        """returns all terminal leaves of tree"""
+        leaves = []
+        if node.children:
+            for child in node.children:
+                leaves.extend(self._get_leaves(child))
+        else:
+            leaves.append(node)
+
+        return leaves
+
+    def predict(self, x):
+        if self.n_jobs > 1:
+            with Pool(processes=self.n_jobs) as pool:
+                predictions = pool.starmap(self._find_leaf, zip(x, repeat(self.root)))
+        else:
+            predictions = []
+            for instance in x:
+                predictions.append(self._find_leaf(instance, self.root))
+
+        return predictions
+
+
+class DecisionTreeRegressor(Tree):
+    """Decision Tree regressor class"""
+    def __init__(self, criterion='mse', max_depth=None,\
+        max_leaves=None, max_features=None, min_sample_split=None, n_jobs=1):
+        super().__init__(criterion, max_depth, max_leaves, \
+            max_features, min_sample_split, n_jobs)
+            
+    def fit(self, x, y):
+        super().fit(x, y)
+
+    def _get_impurity(self, y, _):
+        """calculates mse or mae of given samples
+        
+        Arguments:
+        y -- vector of labels for samples
+        _ -- positional argument kept for consistency with _get_impurity
+                method of DecisionTreeClassifier
+
+        Returns:
+        impurity -- impurity of the samples in terms of mse or mae
+        """
+        if self.criterion == 'mse':
+            mean = np.mean(y)
+            impurity = np.mean(np.square(y - mean))
+        else:
+            mode = Counter(y).most_common()[0][0]
+            impurity = np.mean(np.abs(y - mode))
+
+        return impurity
+
+    def _find_leaf(self, instance, node):
+        """recursively find terminal leaf based on x instance's 
+        feature values"""
+        if node.children:           # check if the node is split
+            if instance[node.feature] < node.splitter:
+                # look for values on the left child
+                prediction = self._find_leaf(instance, node.children[0])
+            else:
+                # look for values on the right child
+                prediction = self._find_leaf(instance, node.children[1])
+        else:
+            leaf_values = self.y[node.indices]      # label values at node
+            if self.criterion == 'mse':
+                prediction = np.mean(leaf_values)
+            else:
+                prediction = Counter(leaf_values).most_common()[0][0]
+
+        return prediction
+
+
+class DecisionTreeClassifier(Tree):
+    """Decision Tree classifier class"""
+    def __init__(self, criterion='entropy', max_depth=None,\
+        max_leaves=None, max_features=None, min_sample_split=None, n_jobs=1):
+        super().__init__(criterion, max_depth, max_leaves, \
+            max_features, min_sample_split, n_jobs)
 
     def _get_impurity(self, y, m):
         """calculates entropy or gini of given samples
@@ -192,17 +253,6 @@ class DecisionTree(Tree):
 
         return impurity
 
-    def predict(self, x):
-        if self.n_jobs > 1:
-            with Pool(processes=self.n_jobs) as pool:
-                predictions = pool.starmap(self._find_leaf, zip(x, repeat(self.root)))
-        else:
-            predictions = []
-            for instance in x:
-                predictions.append(self._find_leaf(instance, self.root))
-
-        return predictions
-
     def _find_leaf(self, instance, node):
         """recursively find terminal leaf based on x instance's 
         feature values"""
@@ -222,14 +272,14 @@ class DecisionTree(Tree):
 
 if __name__ == '__main__':
     import time
-    from sklearn.datasets import load_iris
+    from sklearn.datasets import load_boston, load_iris
+    from sklearn.metrics import mean_squared_error
 
-    x = np.array([[31, 29, 27, 35, 28, 40, 39], [45, 47, 55, 53, 51, 50, 41]]).T
-    y = np.array([1, 0, 0, 1, 0, 1, 0])
-    x_iris, y_iris = load_iris(True)
+    x, y = load_boston(True)
+    x1, y1 = load_iris(True)
 
     start_time = time.time()
-    tree = DecisionTree('entropy', n_jobs = 1, max_depth = 2)
-    tree.fit(x_iris, y_iris)
-    print(sum(tree.predict(x_iris) != y_iris))
+    tree = DecisionTreeClassifier('entropy', n_jobs = 6, max_depth = 10)
+    tree.fit(x1, y1)
+    print(mean_squared_error(tree.predict(x1), y1))
     print(f'Elapsed time: {time.time() - start_time}')
