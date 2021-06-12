@@ -52,6 +52,51 @@ class AdaBoost:
         return votes
 
 
+class GradientBoosting:
+    """gradient boosting regressor"""
+    def __init__(self, loss='ls', learning_rate=0.1, subsample=1.0, \
+        n_estimators=100, criterion='mse', max_depth=3, max_leaves=None, \
+            max_features=None, min_sample_split=None):
+        self.loss = loss
+        self.learning_rate = learning_rate
+        self.subsample = subsample
+        self.n_estimators = n_estimators
+        self.estimators = []        # placeholder for estimators
+        self.tree_parameters = {
+            'criterion': criterion,
+            'max_depth': max_depth,
+            'max_leaves': max_leaves,
+            'max_features': max_features,
+            'min_sample_split': min_sample_split
+        }
+
+    def fit(self, x, y):
+        m = len(x)
+        self.base_prediction = np.mean(y)
+        predictions = np.repeat(self.base_prediction, m)
+        residuals = y - predictions
+        subsample = int(m * self.subsample)
+
+        for _ in range(self.n_estimators):
+            indices = np.random.choice(m, subsample, replace=False)
+            estimator = DecisionTreeRegressor(**self.tree_parameters)
+            estimator.fit(x[indices], residuals[indices])
+            residual_prediction = estimator.predict(x)
+            predictions += self.learning_rate * np.asarray(residual_prediction)
+            residuals = y - predictions
+            self.estimators.append(estimator)
+
+    def predict(self, x):
+        residuals = np.empty((self.n_estimators , len(x)))
+        
+        for i, estimator in enumerate(self.estimators):
+            residuals[i] = estimator.predict(x)
+
+        predictions = self.base_prediction + self.learning_rate * np.sum(residuals, axis=0)
+
+        return predictions
+
+
 class RandomForest:
     def __init__(self, estimator, n_estimators, criterion, max_depth,\
         max_leaves, max_features, min_sample_split):
@@ -121,6 +166,14 @@ def test_adaboost():
     predictions = model.predict(x)
     print(np.sum(predictions != y))
 
+def test_gradient_boosting():
+    x, y = load_boston(True)
+
+    model = GradientBoosting()
+    model.fit(x, y)
+    predictions = model.predict(x)
+    print(np.mean((predictions - y)**2))
+
 def test_random_forest_classifier():
     x, y = load_breast_cancer(True)
 
@@ -159,7 +212,8 @@ if __name__ == '__main__':
     #test_adaboost()
     #test_random_forest_classifier()
     #test_tree_classifier()
-    test_random_forest_regressor()
+    #test_random_forest_regressor()
+    test_gradient_boosting()
     test_tree_regressor()
 
 
